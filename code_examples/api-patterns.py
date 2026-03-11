@@ -1,24 +1,9 @@
-# Chapter 6: LLM API Patterns
+"""Code examples from Chapter 06: api-patterns"""
 
-Every LLM tutorial shows you this:
-
-```python
+# --- Example 1 ---
 response = client.chat.completions.create(...)
-```
 
-And it works. In your notebook. On your laptop. With one document. Then you deploy it and discover that LLM APIs are, to put it diplomatically, unreliable.
-
-I kept a log for one month of every API error our pipeline hit. Rate limits: 847 times. Timeouts: 203 times. Server errors (500/503): 68 times. Random connection resets: 31 times. That's over a thousand failures in a month, on a pipeline processing about ten thousand documents. Roughly one in ten calls fails on the first try.
-
-You need to build for this.
-
----
-
-## Retries: The Non-Negotiable
-
-If you take nothing else from this chapter, take this: wrap every API call in a retry with exponential backoff. Not linear backoff, not fixed delays. Exponential, with jitter.
-
-```python
+# --- Example 2 ---
 import time
 import random
 from functools import wraps
@@ -51,19 +36,8 @@ def retry_with_backoff(
             raise last_exception
         return wrapper
     return decorator
-```
 
-The jitter is important. Without it, when a rate limit hits and all your workers retry at the same time, they'll all retry at the same time again. And again. It's called the thundering herd problem and it will make your rate limiting worse, not better. Random jitter spreads the retries out.
-
-I use max_retries=3 for most calls. First retry after ~1 second, second after ~2 seconds, third after ~4 seconds. If it's still failing after that, something is genuinely broken and retrying won't help.
-
----
-
-## Rate Limiting: Be a Good Citizen
-
-OpenAI's rate limits are per-minute. Hit them and you get a 429 response. Hit them hard enough and they'll throttle you for longer. Better to limit yourself proactively.
-
-```python
+# --- Example 3 ---
 import threading
 
 class RateLimiter:
@@ -93,13 +67,8 @@ class RateLimiter:
         elapsed = now - self.last_refill
         self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
         self.last_refill = now
-```
 
-We run at about 80% of our actual rate limit. Leaves headroom for bursts and prevents the pipeline from constantly bouncing off the ceiling.
-
-Even better -- adapt to the rate limit headers the API sends back:
-
-```python
+# --- Example 4 ---
 class AdaptiveRateLimiter:
     def __init__(self):
         self.retry_after = 0
@@ -120,17 +89,8 @@ class AdaptiveRateLimiter:
             self.retry_after = 0
         elif self.remaining == 0 and self.reset_at > time.time():
             time.sleep(self.reset_at - time.time())
-```
 
-This way the limiter learns from the API's actual responses instead of relying on hardcoded numbers that might change.
-
----
-
-## Batching: Parallel But Controlled
-
-Processing documents one at a time is slow. Processing them all at once will get you rate-limited instantly. The answer is controlled concurrency.
-
-```python
+# --- Example 5 ---
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def batch_process(items, processor, batch_size=10, max_workers=5):
@@ -158,19 +118,8 @@ def batch_process(items, processor, batch_size=10, max_workers=5):
                 log.error(f"Item failed: {e}")
     
     return results
-```
 
-Five concurrent workers with a one-second pause every ten submissions. It's not optimal in the theoretical sense -- you could squeeze more throughput with adaptive concurrency. But it's predictable, easy to reason about, and stays well within rate limits.
-
-The `results = [None] * len(items)` pattern preserves ordering. When futures complete out of order (they will), the index tracks which result goes where. I learned this after spending an afternoon debugging why document results were shuffled.
-
----
-
-## Fallback Providers
-
-Last February, OpenAI had a four-hour outage. Our pipeline just... stopped. Ten thousand documents queued up, nothing processing. After that, I built a fallback system.
-
-```python
+# --- Example 6 ---
 from dataclasses import dataclass
 
 @dataclass
@@ -212,19 +161,8 @@ class FallbackClient:
                     log.error(f"{provider.name} marked unhealthy after {self.max_failures} failures")
         
         raise Exception(f"All providers failed: {errors}")
-```
 
-Primary: OpenAI gpt-4o-mini. Fallback: Anthropic claude-3-haiku. Emergency fallback: a local Llama model that's slower but never goes down. In practice, the fallback has triggered maybe five times in six months. But those five times, the pipeline kept running instead of dying.
-
-One subtlety: different models produce slightly different output formats. Even with the same prompt, gpt-4o-mini and claude-3-haiku will structure JSON differently sometimes. Make sure your parsing is robust enough to handle minor variations, or normalize the output in a post-processing step.
-
----
-
-## Stream for Users, Batch for Pipelines
-
-Quick rule. If a human is watching, stream the response so they see tokens appear. If a machine is consuming the output, just wait for the complete response. Streaming adds complexity (partial JSON, incomplete sentences) that you don't need in a pipeline.
-
-```python
+# --- Example 7 ---
 # For pipelines: just get the whole thing
 def pipeline_call(prompt: str) -> str:
     response = client.chat.completions.create(
@@ -244,15 +182,8 @@ def user_facing_call(prompt: str):
     for chunk in response:
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
-```
 
----
-
-## Putting It All Together
-
-Here's roughly what our production client looks like. Not the prettiest code, but it's survived six months of daily use without major incidents.
-
-```python
+# --- Example 8 ---
 class ResilientLLMClient:
     def __init__(self, config):
         self.fallback = FallbackClient(config.providers)
@@ -292,10 +223,4 @@ class ResilientLLMClient:
                 time.sleep(delay)
         
         raise last_error
-```
 
-It's retries wrapping fallbacks wrapping rate limiting. Three layers of defense against the chaos of distributed systems. Boring? Absolutely. Reliable? Also absolutely.
-
----
-
-*Next: what happens when things go wrong despite all your defenses. Error handling and recovery for when the inevitable happens.*

@@ -1,18 +1,6 @@
-# Chapter 5: Prompt Engineering for Pipelines
+"""Code examples from Chapter 05: prompt-engineering"""
 
-Forget everything you know about prompt engineering from ChatGPT. Seriously. Chat prompting is about creativity, flexibility, getting interesting responses. Pipeline prompting is the opposite. You want boring. You want predictable. You want the LLM to return the exact same structure on the ten thousandth document that it returned on the first.
-
-I learned this the hard way. My first pipeline prompts were conversational, flexible, "creative." And they worked great -- on the five test documents I tried. Then I ran them on 500 real documents and got back a beautiful variety of output formats, none of which my parser could handle.
-
----
-
-## Always. Use. Structured. Output.
-
-Never, under any circumstances, ask an LLM to return free text that you then try to parse with regex. I know it's tempting. It seems simpler. It will break at 2 AM on a Sunday when a document has an unexpected format and your regex matches the wrong thing.
-
-### JSON Mode (Minimum Acceptable)
-
-```python
+# --- Example 1 ---
 from openai import OpenAI
 
 client = OpenAI()
@@ -41,11 +29,8 @@ If a field is not found, use an empty array."""
     )
     
     return json.loads(response.choices[0].message.content)
-```
 
-### Function Calling (What I Actually Use)
-
-```python
+# --- Example 2 ---
 from pydantic import BaseModel
 
 class Person(BaseModel):
@@ -72,17 +57,8 @@ def extract_with_functions(text: str) -> ExtractedEntities:
     )
     
     return response.choices[0].message.parsed
-```
 
-Function calling beats JSON mode because the schema is enforced at the API level, you get Pydantic validation for free, and your IDE gives you autocomplete on the results. After switching, our parsing failures dropped from about 3% to essentially zero.
-
----
-
-## Show the Model What You Want
-
-Few-shot prompting -- giving examples of input/output pairs -- is the single most effective technique for pipeline prompts. Long instructions about what to do are ambiguous. Examples are not.
-
-```python
+# --- Example 3 ---
 FEW_SHOT_TEMPLATE = """Classify the document into one of these categories:
 - CONTRACT: Legal agreements, terms of service
 - INVOICE: Bills, payment requests
@@ -108,17 +84,8 @@ Now classify this document:
 
 Document: {document_text}
 Classification:"""
-```
 
-Two to four examples is usually the sweet spot. More than that and you're burning tokens without much accuracy gain. Include at least one edge case -- a document that's borderline between categories, or one with unusual formatting. The model generalizes from your examples, so make them representative of the mess you'll encounter in production.
-
----
-
-## Chain-of-Thought for the Hard Stuff
-
-Some extraction tasks need the model to reason through multiple steps. Contract analysis is a good example -- you need to identify parties, then find dates, then connect financial terms to the right parties. If you just ask for all of it at once, the model skips steps and makes mistakes.
-
-```python
+# --- Example 4 ---
 COT_PROMPT = """Analyze this contract and extract key terms.
 
 Think through this step by step:
@@ -146,17 +113,8 @@ Step 4 - Termination:
 
 Final Extraction (JSON):
 """
-```
 
-This is slower and more expensive per call -- more output tokens means more cost. But for complex documents where accuracy matters, the accuracy improvement is worth it. We use chain-of-thought for contract analysis and financial document extraction. For simple classification? No need, just adds cost.
-
----
-
-## Handle the Edge Cases in the Prompt
-
-Documents fail in predictable ways. Missing fields, unexpected languages, corrupted text. If you don't tell the model what to do in these cases, it'll improvise, and you won't like the result.
-
-```python
+# --- Example 5 ---
 ROBUST_PROMPT = """Extract information from this document.
 
 IMPORTANT:
@@ -175,17 +133,8 @@ Document:
 {document}
 
 Return JSON only."""
-```
 
-That `null` instruction is critical. Without it, you'll get a mix of empty strings, "N/A", "not found", "none", "unknown", and a dozen other variations across your ten thousand documents. Your downstream code needs to handle one null pattern, not twelve string patterns.
-
----
-
-## Version Your Prompts Like Code
-
-When I first started, prompts lived as string constants scattered across the codebase. One day I changed a prompt to fix an edge case and broke three other things. Now we version them.
-
-```python
+# --- Example 6 ---
 PROMPTS = {
     "extraction": {
         "v1": EXTRACTION_V1,   # original
@@ -200,17 +149,8 @@ def get_prompt(name: str, version: str = "latest") -> str:
     if version == "latest":
         version = versions["latest"]
     return versions[version]
-```
 
-When I change a prompt, the old version stays. I can A/B test the new one against the old one on the same documents. If the new version is worse on some document types, I can roll back in one line. It's like database migrations but for prompts.
-
----
-
-## Test Your Prompts
-
-This seems obvious but almost nobody does it. Prompts are code. Test them.
-
-```python
+# --- Example 7 ---
 import pytest
 
 TEST_CASES = [
@@ -235,19 +175,8 @@ def test_consistency():
     results = [classify_document(text) for _ in range(5)]
     classifications = [r["classification"] for r in results]
     assert len(set(classifications)) == 1
-```
 
-That consistency test has caught problems I would have otherwise missed. Temperature 0 helps, but even at temperature 0, LLMs aren't perfectly deterministic. If the same document gets classified differently on different runs, your prompt is ambiguous and needs to be tighter.
-
-We run these tests on every prompt change as part of CI. Each test costs maybe $0.01 in API calls. Finding a broken prompt in production costs a lot more.
-
----
-
-## Save Tokens, Save Money
-
-A prompt that runs once? Who cares about length. A prompt that runs ten thousand times a month? Every token counts.
-
-```python
+# --- Example 8 ---
 # This costs ~80 tokens per call in system message alone:
 """I would like you to please analyze the following document and extract 
 some key information from it. The information I'm looking for includes
@@ -261,19 +190,8 @@ and any dates that appear in the text. Please format your response as JSON."""
 - dates: [ISO format]
 
 Return JSON only."""
-```
 
-Fifty tokens saved per call. At 10,000 calls a month with gpt-4o-mini, that's about $0.075 saved. Not life-changing. But with gpt-4o, it's $1.50. And it adds up across every prompt in your pipeline.
-
-The bigger wins come from truncating input intelligently. Don't send a 20-page document when you only need the first three pages. Don't include boilerplate headers and footers that appear on every page. Trim what you know is irrelevant before it hits the API.
-
----
-
-## A Simple Template System
-
-Nothing fancy. Just enough structure to keep things organized.
-
-```python
+# --- Example 9 ---
 from string import Template
 from enum import Enum
 
@@ -303,10 +221,4 @@ class PromptLibrary:
     @classmethod
     def get(cls, prompt_type: PromptType, **kwargs) -> str:
         return cls._templates[prompt_type].safe_substitute(**kwargs)
-```
 
-I considered using Jinja2 or something more powerful. Decided against it. The simpler the template system, the easier it is to debug when something goes wrong at 2 AM. And something always goes wrong at 2 AM.
-
----
-
-*Next: your prompts are great, but the API will let you down. Rate limits, timeouts, random errors -- let's build resilient API clients.*

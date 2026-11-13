@@ -1,0 +1,21 @@
+[project]
+name = "llm-pipeline-cookbook"
+version = "1.0.0"
+description = "Production patterns for LLM pipelines: runnable, tested versions of the cookbook's core patterns."
+requires-python = ">=3.10"
+dependencies = ["opentelemetry-api>=1.25", "opentelemetry-sdk>=1.25"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools]
+packages = ["patterns"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 130
+extend-exclude = ["code_examples", "build"]   # code_examples are the excerpts as printed in the book
